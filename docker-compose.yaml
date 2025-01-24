@@ -1,0 +1,13 @@
+services:
+  nca-atlas-db:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3000:3000"
+      - "5432:5432"
+    volumes:
+      - ./data:/data
+      - ./config:/etc/martin # Allow config changes without rebuild
+    environment:
+      - POSTGRES_PASSWORD=postgres

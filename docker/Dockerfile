@@ -1,13 +1,14 @@
-FROM rust:1.75-slim as builder
+FROM rust:1.84-slim as builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install martin
 
-FROM postgres:15-bullseye
+FROM postgres:17-bullseye
 
 RUN apt-get update && apt-get install -y \
     postgis \
@@ -31,13 +32,6 @@ COPY config/martin-config.yaml /etc/
 COPY scripts/ /usr/local/bin/
 COPY data/ /data/
 
-RUN chmod +x /usr/local/bin/start-services.sh
-
-ARG DOWNLOAD_DATA=false
-RUN if [ "$DOWNLOAD_DATA" = "true" ] ; then python3 /usr/local/bin/download_sources.py --root ; fi
-RUN python3 /usr/local/bin/seed_nca_atlas.py --root
-RUN python3 /usr/local/bin/process_ncei_normals.py --root
-
-EXPOSE 3000 5432
+RUN chmod +x /usr/local/bin/start-services.sh /usr/local/bin/seed_nca_atlas.py
 
 CMD ["/usr/local/bin/start-services.sh"]
