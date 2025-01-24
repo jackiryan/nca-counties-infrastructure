@@ -1,0 +1,46 @@
+keep_alive: 75
+listen_addresses: '0.0.0.0:3000'
+worker_processes: 8
+cache_size_mb: 1024
+
+postgres:
+  connection_string: 'postgresql://postgres:postgres@localhost:5432/climate_data'
+  pool_size: 20
+
+tables:
+  climate:
+    schema: public
+    table: counties
+    srid: 4326
+    geometry_column: geom
+    id_column: id
+    minzoom: 0
+    maxzoom: 22
+    properties:
+      name: varchar
+      state_abbr: char
+      pr_annual: float
+      tavg: float
+      tmax_days_ge_95f: float
+      gwl: numeric
+    queries:
+      - sql: >
+          SELECT 
+            c.id,
+            c.name,
+            c.state_abbr,
+            cv.pr_annual,
+            cv.tavg,
+            cv.tmax_days_ge_95f,
+            cv.gwl,
+            ST_AsMVTGeom(
+              c.geom,
+              !bbox!,
+              4096,
+              64,
+              true
+            ) as geom
+          FROM counties c
+          JOIN climate_variables cv ON c.id = cv.county_id
+          WHERE c.geom && !bbox!
+          AND cv.gwl = !param.gwl!

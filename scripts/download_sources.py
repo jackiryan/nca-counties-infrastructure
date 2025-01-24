@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Download data sources for NCA counties database."""
+import argparse
 import boto3
 from pathlib import Path
 import requests
 import tarfile
 
 
-def download_noaa_normals():
+def download_noaa_normals(src_dir: Path):
     URL = "https://noaa-normals-pds.s3.amazonaws.com/normals-annualseasonal/1991-2020/archive/us-climate-normals_1991-2020_v1.0.1_annualseasonal_multivariate_by-station_c20230404.tar.gz"
     FILENAME = URL.split("/")[-1]
-    SOURCE_DIR = Path("data/sources")
+    SOURCE_DIR = src_dir
 
     SOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,11 +37,11 @@ def download_noaa_normals():
     print("Download and extraction complete")
 
 
-def sync_s3_bucket():
+def sync_s3_bucket(src_dir: Path):
     s3 = boto3.client("s3")
     bucket = "ar-db25"
     prefix = "ar-parent/nca-atlas/"
-    SOURCE_DIR = Path("data/sources")
+    SOURCE_DIR = src_dir
     SOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
     # Sync the bucket key to the sources directory
@@ -61,8 +62,24 @@ def sync_s3_bucket():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--root",
+        action="store_true",
+        help="download data inside of docker image instead of locally.",
+    )
+    parser.add_argument(
+        "--no-aws",
+        action="store_true",
+        help="skip downloading NCA Atlas data from AWS.",
+    )
+    args = parser.parse_args()
+    src_dir = Path("data/sources")
+    if args.root:
+        src_dir = Path("/data/sources")
     try:
-        download_noaa_normals()
-        sync_s3_bucket()
+        download_noaa_normals(src_dir)
+        if not args.no_aws:
+            sync_s3_bucket(src_dir)
     except Exception as e:
         print(f"An error occurred: {e}")
