@@ -64,8 +64,8 @@ def load_geojson_data(
     """
     )
 
-    # Get county_id to fips mapping
-    fips_to_id = dict(cursor.fetchall())
+    # Get FIPS to county_id mapping
+    fips_to_id = {fips: id for id, fips in cursor.fetchall()}
 
     # Now load climate variables for each GWL
     for gwl_file, gwl_value in gwl_files.items():

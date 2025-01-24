@@ -1,13 +1,24 @@
 services:
-  nca-atlas-db:
+  martin:
+    image: ghcr.io/maplibre/martin:v0.14.2
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@ar-db/ar_climate_data
+    depends_on:
+      - ar-db
+  ar-db:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    restart: unless-stopped
     ports:
-      - "3000:3000"
       - "5432:5432"
     volumes:
+      - ./pg_data:/var/lib/postgresql/data
       - ./data:/data
-      - ./config:/etc/martin # Allow config changes without rebuild
     environment:
+      - POSTGRES_DB=ar_climate_data
+      - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres

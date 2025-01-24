@@ -1,13 +1,3 @@
-FROM rust:1.84-slim as builder
-
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN cargo install martin
-
 FROM postgres:17-bullseye
 
 RUN apt-get update && apt-get install -y \
@@ -22,16 +12,15 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /tmp/
 RUN pip3 install -r /tmp/requirements.txt
 
-# Copy Martin binary from builder stage
-COPY --from=builder /usr/local/cargo/bin/martin /usr/local/bin/martin
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
 
 # Copy configuration and scripts
-COPY docker/start-services.sh /usr/local/bin/
-COPY database/init-db.sql /docker-entrypoint-initdb.d/
-COPY config/martin-config.yaml /etc/
+COPY docker/seed-db.sh /usr/local/bin/
 COPY scripts/ /usr/local/bin/
+COPY database/init-db.sql /docker-entrypoint-initdb.d/
 COPY data/ /data/
 
-RUN chmod +x /usr/local/bin/start-services.sh /usr/local/bin/seed_nca_atlas.py
+RUN chmod +x /usr/local/bin/seed-db.sh /usr/local/bin/seed_nca_atlas.py
 
-CMD ["/usr/local/bin/start-services.sh"]
+CMD ["postgres"]

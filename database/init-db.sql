@@ -1,5 +1,5 @@
 -- Create database
-CREATE DATABASE ar_climate_data;
+-- CREATE DATABASE ar_climate_data;
 \c ar_climate_data
 
 -- Enable PostGIS
