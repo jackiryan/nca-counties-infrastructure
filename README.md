@@ -21,7 +21,19 @@ All source data files should now be located in the `data/sources` directory (i.e
 
 ### Build Docker image
 
-Instructions TBD
+If you are on a Linux or MacOS system, simply run the build script after completing the previous section:
+
+```bash
+./build.sh
+```
+
+If you mess up and need to start over, run the clean script:
+
+```bash
+./clean.sh
+```
+
+A Windows compatible version of these steps will be available later.
 
 ## Contact
 
