@@ -45,7 +45,7 @@ CREATE INDEX counties_geom_idx ON counties USING GIST (geom);
 CREATE INDEX climate_vars_county_gwl_idx ON climate_variables (county_id, gwl);
 
 CREATE OR REPLACE
-    FUNCTION get_climate_tiles(z integer, x integer, y integer, query_params json DEFAULT '{}'::json)
+    FUNCTION counties_gwl(z integer, x integer, y integer, query_params json DEFAULT '{}'::json)
     RETURNS bytea AS $$
 DECLARE
     mvt bytea;
@@ -54,7 +54,7 @@ BEGIN
     -- Extract GWL from query params, default to 2.0
     gwl_param := COALESCE((query_params->>'gwl')::numeric, 2.0);
     
-    SELECT INTO mvt ST_AsMVT(tile, 'climate', 4096, 'geom') FROM (
+    SELECT INTO mvt ST_AsMVT(tile, 'counties_gwl', 4096, 'geom') FROM (
         SELECT 
             c.id,
             c.name,
@@ -76,15 +76,15 @@ BEGIN
             cv.pr_days_above_nonzero_99th,
             cv.gwl,
             ST_AsMVTGeom(
-                c.geom,
+                ST_Transform(ST_CurveToLine(c.geom), 3857),
                 ST_TileEnvelope(z, x, y),
                 4096,
                 64,
                 true
-            ) as geom
+            ) AS geom
         FROM counties c
         JOIN climate_variables cv ON c.id = cv.county_id
-        WHERE c.geom && ST_TileEnvelope(z, x, y)
+        WHERE c.geom && ST_Transform(ST_TileEnvelope(z, x, y), 4326)
         AND cv.gwl = gwl_param
     ) as tile WHERE geom IS NOT NULL;
 
@@ -94,12 +94,12 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
 -- Add TileJSON metadata
 DO $do$ BEGIN
-    EXECUTE 'COMMENT ON FUNCTION get_climate_tiles IS $tj$' || $$
+    EXECUTE 'COMMENT ON FUNCTION counties_gwl IS $tj$' || $$
     {
         "description": "Climate projection data by county",
         "vector_layers": [
             {
-                "id": "climate",
+                "id": "counties_gwl",
                 "fields": {
                     "name": "String",
                     "state_abbr": "String",

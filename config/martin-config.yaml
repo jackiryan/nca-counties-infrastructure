@@ -9,72 +9,9 @@ postgres:
   pool_size: 20
 
 
-tables:
-  counties:
+functions:
+  counties_gwl:
     schema: public
-    table: counties
-    srid: 4326
-    geometry_column: geom
-    id_column: id
+    function: counties_gwl
     minzoom: 0
     maxzoom: 22
-    properties:
-      name: varchar
-      state_abbr: char
-      pr_above_nonzero_99th: float
-      prmax1day: float
-      prmax5yr: float
-      tavg: float
-      tmax1day: float
-      tmax_days_ge_100f: float
-      tmax_days_ge_105f: float
-      tmax_days_ge_95f: float
-      tmean_jja: float
-      tmin_days_ge_70f: float
-      tmin_days_le_0f: float
-      tmin_days_le_32f: float
-      tmin_jja: float
-      pr_annual: float
-      pr_days_above_nonzero_99th: float
-      gwl: numeric
-    queries:
-      - sql: >
-          SELECT 
-            c.id,
-            c.name,
-            c.state_abbr,
-            cv.pr_above_nonzero_99th,
-            cv.prmax1day,
-            cv.prmax5yr,
-            cv.tavg,
-            cv.tmax1day,
-            cv.tmax_days_ge_100f,
-            cv.tmax_days_ge_105f,
-            cv.tmax_days_ge_95f,
-            cv.tmean_jja,
-            cv.tmin_days_ge_70f,
-            cv.tmin_days_le_0f,
-            cv.tmin_days_le_32f,
-            cv.tmin_jja,
-            cv.pr_annual,
-            cv.pr_days_above_nonzero_99th,
-            cv.gwl,
-            ST_AsMVTGeom(
-              c.geom,
-              !bbox!,
-              4096,
-              64,
-              true
-            ) as geom
-          FROM counties c
-          JOIN climate_variables cv ON c.id = cv.county_id
-          WHERE c.geom && !bbox!
-          AND cv.gwl = !param.gwl!
-
-functions:
-  climate_tiles:
-    function: get_climate_tiles
-    parameters:
-      - name: gwl
-        type: number
-        default: 2.0
