@@ -7,10 +7,10 @@ postgres:
   connection_string: '$DATABASE_URL'
   default_srid: 4326
   pool_size: 20
-  auto_publish: false
+
 
 tables:
-  climate:
+  counties:
     schema: public
     table: counties
     srid: 4326
@@ -70,3 +70,11 @@ tables:
           JOIN climate_variables cv ON c.id = cv.county_id
           WHERE c.geom && !bbox!
           AND cv.gwl = !param.gwl!
+
+functions:
+  climate_tiles:
+    function: get_climate_tiles
+    parameters:
+      - name: gwl
+        type: number
+        default: 2.0
