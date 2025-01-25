@@ -7,6 +7,7 @@ postgres:
   connection_string: '$DATABASE_URL'
   default_srid: 4326
   pool_size: 20
+  auto_publish: false
 
 tables:
   climate:
