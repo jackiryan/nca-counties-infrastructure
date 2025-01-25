@@ -2,3 +2,4 @@ pg_data/
 data/
 .mypy_cache/
 venv/
+.env

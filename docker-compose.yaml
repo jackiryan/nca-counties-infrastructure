@@ -5,7 +5,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@ar-db/ar_climate_data
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@ar-db/ar_climate_data
     depends_on:
       - ar-db
   ar-db:
@@ -21,4 +21,4 @@ services:
     environment:
       - POSTGRES_DB=ar_climate_data
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}

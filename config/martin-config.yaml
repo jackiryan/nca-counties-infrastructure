@@ -4,7 +4,8 @@ worker_processes: 8
 cache_size_mb: 1024
 
 postgres:
-  connection_string: 'postgresql://postgres:postgres@localhost:5432/climate_data'
+  connection_string: '$DATABASE_URL'
+  default_srid: 4326
   pool_size: 20
 
 tables:
@@ -19,9 +20,21 @@ tables:
     properties:
       name: varchar
       state_abbr: char
-      pr_annual: float
+      pr_above_nonzero_99th: float
+      prmax1day: float
+      prmax5yr: float
       tavg: float
+      tmax1day: float
+      tmax_days_ge_100f: float
+      tmax_days_ge_105f: float
       tmax_days_ge_95f: float
+      tmean_jja: float
+      tmin_days_ge_70f: float
+      tmin_days_le_0f: float
+      tmin_days_le_32f: float
+      tmin_jja: float
+      pr_annual: float
+      pr_days_above_nonzero_99th: float
       gwl: numeric
     queries:
       - sql: >
@@ -29,9 +42,21 @@ tables:
             c.id,
             c.name,
             c.state_abbr,
-            cv.pr_annual,
+            cv.pr_above_nonzero_99th,
+            cv.prmax1day,
+            cv.prmax5yr,
             cv.tavg,
+            cv.tmax1day,
+            cv.tmax_days_ge_100f,
+            cv.tmax_days_ge_105f,
             cv.tmax_days_ge_95f,
+            cv.tmean_jja,
+            cv.tmin_days_ge_70f,
+            cv.tmin_days_le_0f,
+            cv.tmin_days_le_32f,
+            cv.tmin_jja,
+            cv.pr_annual,
+            cv.pr_days_above_nonzero_99th,
             cv.gwl,
             ST_AsMVTGeom(
               c.geom,

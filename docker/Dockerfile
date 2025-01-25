@@ -12,13 +12,11 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /tmp/
 RUN pip3 install -r /tmp/requirements.txt
 
-ENV POSTGRES_USER=postgres
-ENV POSTGRES_PASSWORD=postgres
-
 # Copy configuration and scripts
 COPY docker/seed-db.sh /usr/local/bin/
 COPY scripts/ /usr/local/bin/
 COPY database/init-db.sql /docker-entrypoint-initdb.d/
+
 COPY data/ /data/
 
 RUN chmod +x /usr/local/bin/seed-db.sh /usr/local/bin/seed_nca_atlas.py
