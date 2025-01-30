@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/
-RUN pip3 install -r /tmp/requirements.txt
+RUN pip3 install psycopg2-binary>=2.9.9
 
 # Copy configuration and scripts
 COPY docker/seed-db.sh /usr/local/bin/
