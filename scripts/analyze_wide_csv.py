@@ -17,6 +17,49 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+# Maps columns names from NCA5 to the corresponding NOAA normals fields in this dataset
+# Fields with no direct mapping are marked with "--"
+FIELD_MAP: dict[str, str] = {
+    "pr_above_nonzero_99th": "--",
+    "prmax1day": "--",
+    "prmax5yr": "--",
+    "tavg": "ANN-TAVG-NORMAL",
+    "tmax1day": "--",
+    "tmax_days_ge_100f": "ANN-TMAX-AVGNDS-GRTH100",
+    "tmax_days_ge_105f": "--",
+    "tmax_days_ge_95f": "--",
+    "tmean_jja": "JJA-TAVG-NORMAL",
+    "tmin_days_ge_70f": "ANN-TMIN-AVGNDS-LSTH070",
+    "tmin_days_le_0f": "ANN-TMIN-AVGNDS-LSTH000",
+    "tmin_days_le_32f": "ANN-TMIN-AVGNDS-LSTH032",
+    "tmin_jja": "JJA-TMIN-NORMAL",
+    "pr_annual": "ANN-PRCP-NORMAL",
+    "pr_days_above_nonzero_99th": "--",
+}
+
+# Every mapped field should have a corrisponding field with a "comp_flag_" prefix
+# This is a completeness flag that indicates how complete the data is.
+# Values are assigned as follows:
+
+# CompletenessFlag/Attribute
+# C = complete (all 30 years used)
+# S = standard (no more than 5 years missing and no more than 3 consecutive
+# years missing among the sufficiently complete years)
+# R = representative (observed record utilized incomplete, but value was scaled
+# or based on filled values to be representative of the full period of record)
+# P = provisional (at least 10 years used, but not sufficiently complete to be
+# labeled as standard or representative). Also used for parameter values on
+# February 29 as well as for interpolated daily precipitation, snowfall, and
+# snow depth percentiles.
+# Q = quasi-normal (at least 2 years per month, but not sufficiently complete to
+# be labeled as provisional or any other higher flag code. The associated
+# value was computed using a pseudonormals approach or derived from monthly
+# pseudonormals.
+# Blank = the data value is reported as a special value, such as 9999 (special values given in section B of III.
+# Additional Information below)
+
+# Only data with C, S, or R flags are considered "good" data.
+
 
 def analyze_csv(input_csv, sample_rows=None, sample_cols=None, output_plot=None):
     """
@@ -41,6 +84,23 @@ def analyze_csv(input_csv, sample_rows=None, sample_cols=None, output_plot=None)
     print(coverage_stats.head(10).round(2))
     print("\nBottom 10 columns by coverage:")
     print(coverage_stats.tail(10).round(2))
+
+    # Show coverage for any columns that have a direct mapping
+    print("\nCoverage for columns with direct NOAA normals mapping:")
+    for nca5_col, noaa_col in FIELD_MAP.items():
+        if noaa_col != "--":
+            print(f"{noaa_col}: {coverage_stats[noaa_col]:.2f}%")
+
+    # Show coverage for mapped columns with completeness flags that are "good" data
+    print("\nCoverage for columns with direct NOAA normals mapping and 'good' data:")
+    for nca5_col, noaa_col in FIELD_MAP.items():
+        if noaa_col != "--":
+            flag_col = f"comp_flag_{noaa_col}"
+            if flag_col in df:
+                good_data = df[flag_col].isin(["C", "S", "R"]).sum()
+                total_data = len(df)
+                good_pct = (good_data / total_data) * 100
+                print(f"{noaa_col}: {good_pct:.2f}%")
 
     # If the dataset is huge, sampling can help us visualize
     # (We don't necessarily want a 15k x 2k heatmap.)
