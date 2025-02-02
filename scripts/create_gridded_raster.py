@@ -11,6 +11,7 @@ from rasterio.features import geometry_mask
 
 # Import the OrdinaryKriging class from PyKrige
 from pykrige.ok import OrdinaryKriging
+from pykrige.uk import UniversalKriging
 
 
 def parse_arguments():
@@ -40,18 +41,32 @@ def parse_arguments():
         default=20000,
         help="Grid cell size in meters (default: 5000 meters or 5km)",
     )
-    # Support only ordinary kriging for now
-    parser.add_argument(
-        "--interp_method",
-        type=str,
-        default="ordinary",
-        help="Interpolation method to use (e.g., 'ordinary')",
-    )
     parser.add_argument(
         "--variogram_model",
         type=str,
         default="spherical",
         help="Variogram model to use (e.g., 'spherical', 'exponential', etc.)",
+    )
+    parser.add_argument(
+        "--interp_method",
+        type=str,
+        default="universal",  # Changed default to universal
+        choices=["ordinary", "universal"],
+        help="Interpolation method to use (ordinary or universal kriging)",
+    )
+    parser.add_argument(
+        "--drift_terms",
+        type=str,
+        nargs="+",
+        default=["regional_linear"],
+        choices=["regional_linear", "point_log", "external_Z", "specified"],
+        help="Drift terms for universal kriging",
+    )
+    parser.add_argument(
+        "--nlags",
+        type=int,
+        default=20,
+        help="Number of lags to use for variogram calculation",
     )
     return parser.parse_args()
 
@@ -120,32 +135,101 @@ def create_grid(bounds: tuple, resolution: float) -> tuple:
     return xx, yy
 
 
+def filter_close_points(x, y, values, min_distance=1000):  # distance in meters
+    points = np.column_stack((x, y))
+    filtered_indices = []
+    for i in range(len(points)):
+        if i in filtered_indices:
+            continue
+        distances = np.linalg.norm(points[i] - points, axis=1)
+        close_points = np.where(distances < min_distance)[0]
+        if len(close_points) > 1:  # if there are other points too close
+            # Keep only the first point from the cluster
+            filtered_indices.extend(close_points[1:])
+
+    mask = ~np.isin(np.arange(len(x)), filtered_indices)
+    return x[mask], y[mask], values[mask]
+
+
 class KrigingInterpolator:
     """
-    A simple wrapper around PyKrige's OrdinaryKriging.
-    Currently supports only the 'ordinary' method.
+    A wrapper around PyKrige's kriging implementations.
+    Supports both ordinary and universal kriging methods.
     """
 
-    def __init__(self, method="ordinary", variogram_model="spherical", **kwargs):
+    def __init__(
+        self,
+        method="universal",  # Changed default to universal
+        variogram_model="spherical",
+        drift_terms=["regional_linear"],  # Default drift terms
+        nlags=20,  # Increased number of lags for better variogram estimation
+        weight=True,  # Enable distance-based variogram point weighting
+        **kwargs,
+    ):
         self.method = method
         self.variogram_model = variogram_model
+        self.drift_terms = drift_terms
+        self.nlags = nlags
+        self.weight = weight
         self.kwargs = kwargs
 
     def interpolate(self, x, y, values, gridx, gridy):
         """
         Perform kriging interpolation.
-        - gridx, gridy must be strictly ascending 1D arrays.
-        - Returns the interpolated 2D array z in shape (len(gridy), len(gridx)).
-          By PyKrige convention, z[0, :] corresponds to the smallest y.
+        - gridx, gridy must be strictly ascending 1D arrays
+        - Returns interpolated 2D array z in shape (len(gridy), len(gridx))
         """
         if self.method == "ordinary":
-            OK = OrdinaryKriging(
-                x, y, values, variogram_model=self.variogram_model, **self.kwargs
+            krig = OrdinaryKriging(
+                x,
+                y,
+                values,
+                variogram_model=self.variogram_model,
+                nlags=self.nlags,
+                weight=self.weight,
+                **self.kwargs,
             )
-            z, ss = OK.execute("grid", gridx, gridy)
-            return z, ss
+        elif self.method == "universal":
+            krig = UniversalKriging(
+                x,
+                y,
+                values,
+                variogram_model=self.variogram_model,
+                drift_terms=self.drift_terms,
+                nlags=self.nlags,
+                weight=self.weight,
+                **self.kwargs,
+            )
         else:
             raise ValueError(f"Interpolation method {self.method} not supported")
+
+        # Execute kriging
+        z, ss = krig.execute("grid", gridx, gridy)
+
+        return z, ss
+
+    @staticmethod
+    def calculate_drift_components(x, y):
+        """
+        Calculate additional drift components based on geographical features.
+        This can be customized based on known trends in your data.
+        """
+        # Example drift components:
+
+        # Elevation-based drift (if you have elevation data)
+        # elevation = get_elevation(x, y)
+        # drift_elevation = elevation / np.max(elevation)
+
+        # Distance from coast (if relevant)
+        # coast_distance = calculate_coast_distance(x, y)
+        # drift_coastal = np.exp(-coast_distance / scale_factor)
+
+        # Latitude-based temperature gradient
+        drift_latitude = (y - np.min(y)) / (np.max(y) - np.min(y))
+
+        # You could add more components based on known physical relationships
+
+        return drift_latitude  # Return array of drift components
 
 
 def interpolate_measurement(
@@ -254,12 +338,16 @@ def create_measurement_grid(
     # Transform coordinates
     x_stations, y_stations, x_min, x_max, y_min, y_max = transform_coordinates(df)
 
+    x_filtered, y_filtered, values_filtered = filter_close_points(
+        x_stations, y_stations, df[variable_name].values, min_distance=resolution
+    )
+
     # Create grid (2D mesh in ascending order for x and y)
     grid_x_mesh, grid_y_mesh = create_grid((x_min, x_max, y_min, y_max), resolution)
 
     # Prepare coordinates and values for interpolation
-    points = np.column_stack((x_stations, y_stations))
-    values = df[variable_name].values
+    points = np.column_stack((x_filtered, y_filtered))
+    values = values_filtered
 
     # Perform interpolation using ordinary kriging
     grid_temp = interpolate_measurement(
@@ -275,7 +363,7 @@ def create_measurement_grid(
     transform_affine = from_origin(x_min, y_max, resolution, resolution)
 
     # Clip the grid to the lower 48 boundary
-    clip_file = "sources/nation_5m_lower48_epsg5072.gpkg"
+    clip_file = "data/ancillary/nation_5m_lower48_epsg5072.gpkg"
     grid_temp_clipped = clip_to_lower48(grid_temp, transform_affine, clip_file)
 
     # Write the clipped grid to GeoTIFF
