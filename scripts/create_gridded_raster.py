@@ -1,17 +1,25 @@
 import argparse
 from pathlib import Path
+import sys
 import pandas as pd
 import numpy as np
-from scipy.interpolate import griddata
 import rasterio
 from rasterio.transform import from_origin
 from pyproj import Transformer
+import geopandas as gpd
+from rasterio.features import geometry_mask
+
+# Import the OrdinaryKriging class from PyKrige
+from pykrige.ok import OrdinaryKriging
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Create a gridded raster of a given measurement from weather station data."
     )
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
     parser.add_argument(
         "input",
         type=Path,
@@ -29,8 +37,21 @@ def parse_arguments():
         "-r",
         "--resolution",
         type=float,
-        default=5000,
+        default=20000,
         help="Grid cell size in meters (default: 5000 meters or 5km)",
+    )
+    # Support only ordinary kriging for now
+    parser.add_argument(
+        "--interp_method",
+        type=str,
+        default="ordinary",
+        help="Interpolation method to use (e.g., 'ordinary')",
+    )
+    parser.add_argument(
+        "--variogram_model",
+        type=str,
+        default="spherical",
+        help="Variogram model to use (e.g., 'spherical', 'exponential', etc.)",
     )
     return parser.parse_args()
 
@@ -41,11 +62,17 @@ def load_and_clean_data(input_file: Path, variable_name: str) -> pd.DataFrame:
     """
     df = pd.read_csv(input_file)
 
+    if f"comp_flag_{variable_name}" not in df.columns:
+        raise ValueError(
+            f"Expected a completeness flag column 'comp_flag_{variable_name}' "
+            f"but it was not found in the CSV. Check your data."
+        )
+
     # Filter out stations that don't record this measurement
     df = df.dropna(subset=[variable_name])
     # Only completeness flag values of (C)omplete, (S)tandard, or (R)epresentative should be used
     df = df[df[f"comp_flag_{variable_name}"].isin(["C", "S", "R"])]
-    # 9999 is typically a nodata value, it should be caught by the comp_flag though
+    # Exclude the typical no-data value
     df = df[df[variable_name] != 9999]
 
     print(f"Total stations after filtering: {len(df)}")
@@ -57,7 +84,7 @@ def load_and_clean_data(input_file: Path, variable_name: str) -> pd.DataFrame:
 
 def transform_coordinates(df: pd.DataFrame) -> tuple:
     """
-    Transform station coordinates from WGS84 to CONUS Albers.
+    Transform station coordinates from WGS84 to CONUS Albers (EPSG:5072).
     """
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:5072", always_xy=True)
 
@@ -66,8 +93,7 @@ def transform_coordinates(df: pd.DataFrame) -> tuple:
         df["LONGITUDE"].values, df["LATITUDE"].values
     )
 
-    # Define the bounds in Albers projection, these coordinates for
-    # the corners of the CONUS are experimentally derived
+    # Define the bounds in Albers projection (experimentally derived for CONUS)
     x_min, y_min = transformer.transform(-125, 20)
     x_max, y_max = transformer.transform(-60, 50)
 
@@ -75,24 +101,118 @@ def transform_coordinates(df: pd.DataFrame) -> tuple:
 
 
 def create_grid(bounds: tuple, resolution: float) -> tuple:
+    """
+    Creates a meshgrid of x, y coordinates in ascending order:
+    - x: from x_min to x_max
+    - y: from y_min to y_max
+
+    Returns (X_mesh, Y_mesh) arrays.
+    """
     x_min, x_max, y_min, y_max = bounds
+
+    # x ascending from left (min) to right (max)
     grid_x = np.arange(x_min, x_max + resolution, resolution)
-    grid_y = np.arange(y_max, y_min - resolution, -resolution)
-    return np.meshgrid(grid_x, grid_y)
+    # y ascending from bottom (min) to top (max)
+    grid_y = np.arange(y_min, y_max + resolution, resolution)
+
+    # Create 2D meshgrid
+    xx, yy = np.meshgrid(grid_x, grid_y)
+    return xx, yy
 
 
-def interpolate_temperatures(
-    points: np.ndarray, values: np.ndarray, grid_coords: tuple
+class KrigingInterpolator:
+    """
+    A simple wrapper around PyKrige's OrdinaryKriging.
+    Currently supports only the 'ordinary' method.
+    """
+
+    def __init__(self, method="ordinary", variogram_model="spherical", **kwargs):
+        self.method = method
+        self.variogram_model = variogram_model
+        self.kwargs = kwargs
+
+    def interpolate(self, x, y, values, gridx, gridy):
+        """
+        Perform kriging interpolation.
+        - gridx, gridy must be strictly ascending 1D arrays.
+        - Returns the interpolated 2D array z in shape (len(gridy), len(gridx)).
+          By PyKrige convention, z[0, :] corresponds to the smallest y.
+        """
+        if self.method == "ordinary":
+            OK = OrdinaryKriging(
+                x, y, values, variogram_model=self.variogram_model, **self.kwargs
+            )
+            z, ss = OK.execute("grid", gridx, gridy)
+            return z, ss
+        else:
+            raise ValueError(f"Interpolation method {self.method} not supported")
+
+
+def interpolate_measurement(
+    points: np.ndarray,
+    values: np.ndarray,
+    grid_coords: tuple,
+    method: str,
+    variogram_model: str,
 ) -> np.ndarray:
-    return griddata(points, values, grid_coords, method="cubic", fill_value=np.nan)
+    """
+    Interpolate values onto the grid using the specified kriging method.
+
+    grid_coords is assumed to be (X_mesh, Y_mesh) from create_grid()
+    where each is a 2D array. We'll extract unique x and y from them,
+    in ascending order, then flip the result so row=0 corresponds
+    to y_max (north-up).
+    """
+    # Extract ascending 1D arrays
+    unique_x = np.unique(grid_coords[0])  # ascending x
+    unique_y = np.unique(grid_coords[1])  # ascending y
+
+    x = points[:, 0]
+    y = points[:, 1]
+
+    # Instantiate the kriging interpolator.
+    krig = KrigingInterpolator(method=method, variogram_model=variogram_model)
+    z, ss = krig.interpolate(x, y, values, unique_x, unique_y)
+
+    # PyKrige returns z with z[0, :] at the smallest y (i.e., y_min).
+    # If we want row=0 to correspond to y_max for a north-up raster,
+    # we flip the array vertically.
+    z = np.flipud(z)
+
+    return z  # If you want the kriging variance, you could also return ss.
+
+
+def clip_to_lower48(
+    grid_data: np.ndarray, transform: rasterio.transform.Affine, clip_file: str
+) -> np.ndarray:
+    """
+    Clip the grid data to the lower 48 boundary using the provided geopackage file.
+    Pixels outside the boundary are set to np.nan.
+    """
+    gdf = gpd.read_file(clip_file)
+    # Ensure the clipping geometry is in EPSG:5072
+    if gdf.crs != "EPSG:5072":
+        gdf = gdf.to_crs("EPSG:5072")
+    geoms = [geom for geom in gdf.geometry]
+
+    # Create a mask: with invert=True, pixels inside the geometries are True.
+    mask = geometry_mask(
+        geoms, out_shape=grid_data.shape, transform=transform, invert=True
+    )
+    clipped_data = np.where(mask, grid_data, np.nan)
+    return clipped_data
 
 
 def write_geotiff(
     output_file: Path, grid_data: np.ndarray, transform: rasterio.transform.Affine
 ):
     """
-    Write gridded data to GeoTIFF file.
+    Write gridded data to a GeoTIFF file using the given transform.
     """
+    # Make sure the data is in a floating type for nodata=np.nan
+    if not np.issubdtype(grid_data.dtype, np.floating):
+        grid_data = grid_data.astype("float32")
+
     with rasterio.open(
         output_file,
         "w",
@@ -106,6 +226,7 @@ def write_geotiff(
         nodata=np.nan,
     ) as dst:
         dst.write(grid_data, 1)
+        # You can store any custom tags you like
         dst.update_tags(
             TIFFTAG_DATETIME=pd.Timestamp.now().strftime("%Y:%m:%d %H:%M:%S"),
             TIFFTAG_DOCUMENTNAME="1991-2020 Climate Normal Grid",
@@ -121,10 +242,11 @@ def create_measurement_grid(
     output_file: Path,
     variable_name: str = "ANN-TAVG-NORMAL",
     resolution: float = 5000,
+    interp_method: str = "ordinary",
+    variogram_model: str = "spherical",
 ):
     """
-    Create a gridded raster of a given measurement from weather station data.
-    Uses the latest version of the CONUS Albers Equal Area projection (EPSG:5072).
+    Create a gridded raster of a given measurement from weather station data using kriging.
     """
     # Load and clean data
     df = load_and_clean_data(input_file, variable_name)
@@ -132,21 +254,32 @@ def create_measurement_grid(
     # Transform coordinates
     x_stations, y_stations, x_min, x_max, y_min, y_max = transform_coordinates(df)
 
-    # Create grid
+    # Create grid (2D mesh in ascending order for x and y)
     grid_x_mesh, grid_y_mesh = create_grid((x_min, x_max, y_min, y_max), resolution)
 
     # Prepare coordinates and values for interpolation
     points = np.column_stack((x_stations, y_stations))
     values = df[variable_name].values
 
-    # Perform interpolation
-    grid_temp = interpolate_temperatures(points, values, (grid_x_mesh, grid_y_mesh))
+    # Perform interpolation using ordinary kriging
+    grid_temp = interpolate_measurement(
+        points,
+        values,
+        (grid_x_mesh, grid_y_mesh),
+        method=interp_method,
+        variogram_model=variogram_model,
+    )
 
-    # Create geotransform
-    transform = from_origin(x_min, y_max, resolution, resolution)
+    # Create an affine transform consistent with top-left = (x_min, y_max)
+    # Since we flipped the data after kriging, row=0 corresponds to y_max.
+    transform_affine = from_origin(x_min, y_max, resolution, resolution)
 
-    # Write to GeoTIFF
-    write_geotiff(output_file, grid_temp, transform)
+    # Clip the grid to the lower 48 boundary
+    clip_file = "sources/nation_5m_lower48_epsg5072.gpkg"
+    grid_temp_clipped = clip_to_lower48(grid_temp, transform_affine, clip_file)
+
+    # Write the clipped grid to GeoTIFF
+    write_geotiff(output_file, grid_temp_clipped, transform_affine)
 
     print(f"Successfully created gridded raster of {variable_name}: {output_file}")
 
@@ -154,7 +287,14 @@ def create_measurement_grid(
 def main():
     """Main entry point of the script."""
     args = parse_arguments()
-    create_measurement_grid(args.input, args.output, args.measurement, args.resolution)
+    create_measurement_grid(
+        args.input,
+        args.output,
+        variable_name=args.measurement,
+        resolution=args.resolution,
+        interp_method=args.interp_method,
+        variogram_model=args.variogram_model,
+    )
 
 
 if __name__ == "__main__":
