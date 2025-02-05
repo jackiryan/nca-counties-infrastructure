@@ -1,5 +1,6 @@
 pg_data/
-data/
+data/sources/
+data/outputs/
 .mypy_cache/
 venv/
 .env
