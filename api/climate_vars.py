@@ -18,12 +18,18 @@ import uvicorn
 
 app = FastAPI()
 
+dev = False
+if dev:
+    origins = ["*"]
+else:
+    origins = ["https://jackiepi.xyz", "https://www.jackiepi.xyz"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (use specific domains in production)
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["GET"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
