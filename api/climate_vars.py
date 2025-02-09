@@ -1,14 +1,14 @@
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 from sqlalchemy import (
     create_engine,
     MetaData,
     Table,
     Column,
     Integer,
-    String,
     Float,
     Numeric,
     select,
@@ -17,6 +17,14 @@ from sqlalchemy import (
 import uvicorn
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (use specific domains in production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -47,6 +55,8 @@ climate_variables = Table(
     Column("pr_days_above_nonzero_99th", Float),
 )
 
+VALID_COLUMNS = {col.name for col in climate_variables.columns}
+
 
 class ClimateData(BaseModel):
     id: int
@@ -72,22 +82,40 @@ class ClimateData(BaseModel):
     state_abbr: Optional[str] = None
 
 
-@app.get("/climate-variables", response_model=List[ClimateData])
+@app.get("/climate-variables")
 def get_climate_variables(
     county_id: Optional[int] = Query(None, description="Filter by County ID"),
     gwl: Optional[float] = Query(None, description="Filter by Global Warming Level"),
+    var: Optional[str] = Query(
+        None,
+        description="If provided and valid, return only this column (plus required columns)",
+    ),
 ):
     """
-    Get climate variables filtered by county id and GWL
-    """
-    stmt = select(climate_variables)
+    Retrieve climate variables data.
 
-    # Build list of filters (if provided)
+    - If `var` is provided and is one of the valid columns, the response will only include
+      `id`, `county_id`, `gwl`, and the selected column.
+    - Otherwise, all columns are returned.
+    """
+    # Build filters for the query
     filters = []
     if county_id is not None:
         filters.append(climate_variables.c.county_id == county_id)
     if gwl is not None:
         filters.append(climate_variables.c.gwl == gwl)
+
+    # If a valid var is provided, select only a subset of columns.
+    if var and var in VALID_COLUMNS:
+        columns_to_select = [
+            climate_variables.c.id,
+            climate_variables.c.county_id,
+            climate_variables.c.gwl,
+            getattr(climate_variables.c, var),
+        ]
+        stmt = select(*columns_to_select)
+    else:
+        stmt = select(climate_variables)
 
     if filters:
         stmt = stmt.where(and_(*filters))
@@ -99,7 +127,24 @@ def get_climate_variables(
         raise HTTPException(
             status_code=404, detail="No data found for the provided filters"
         )
-    return results
+
+    # When var is provided, dynamically create a subset response model.
+    if var and var in VALID_COLUMNS:
+        # Create a model with required fields and the additional column named as `var`
+        ClimateDataSubset = create_model(
+            "ClimateDataSubset",
+            id=(int, ...),
+            county_id=(int, ...),
+            gwl=(float, ...),
+            **{var: (Optional[float], None)}
+        )
+        # Convert each row into a dictionary and then into the dynamic model.
+        response = [ClimateDataSubset(**dict(row._mapping)) for row in results]
+        return response
+    else:
+        # Return the full data using the full model.
+        response = [ClimateData(**dict(row._mapping)) for row in results]
+        return response
 
 
 if __name__ == "__main__":
