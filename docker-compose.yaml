@@ -1,6 +1,6 @@
 services:
   martin:
-    image: ghcr.io/maplibre/martin:v0.14.2
+    image: ghcr.io/maplibre/martin:v0.15.0
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -11,10 +11,21 @@ services:
     command: -c /etc/martin/martin-config.yaml
     depends_on:
       - ar-db
+  var-api:
+    build:
+      context: .
+      dockerfile: docker/var-api.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@ar-db/ar_climate_data
+    depends_on:
+      - ar-db
   ar-db:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/ar-db.Dockerfile
     restart: unless-stopped
     ports:
       - "5432:5432"
