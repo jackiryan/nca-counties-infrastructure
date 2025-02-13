@@ -1,43 +1,55 @@
 #!/usr/bin/env python3
 import geopandas as gpd
+import json
 import rasterio
 from rasterio.warp import transform_bounds
 from rasterstats import zonal_stats
 import pandas as pd
-import psycopg2
-from psycopg2.extras import execute_values
 import os
-from sqlalchemy import create_engine
-import numpy as np
-from typing import Dict, List
+from shapely.geometry import shape
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_county_geometries(connection_string: str) -> gpd.GeoDataFrame:
+def get_county_geometries(gwl_file: str) -> gpd.GeoDataFrame:
     """
-    Retrieve county geometries from the PostgreSQL database.
+    Retrieve county geometries from a GWL JSON file.
 
     Args:
-        connection_string: PostgreSQL connection string
+        gwl_file: json file
 
     Returns:
         GeoDataFrame containing county geometries and metadata
     """
-    try:
-        engine = create_engine(connection_string)
-        query = """
-            SELECT id, name, state_name, state_abbr, fips, geom 
-            FROM counties;
-        """
-        gdf = gpd.read_postgis(query, engine, geom_col="geom")
-        logger.info(f"Retrieved {len(gdf)} county geometries from database")
-        return gdf
-    except Exception as e:
-        logger.error(f"Error retrieving county geometries: {e}")
-        raise
+    # Load the first file to get county geometries and metadata
+    with open(gwl_file, "r") as f:
+        data = json.load(f)
+
+    # Insert counties first
+    counties_data = [
+        (
+            feature["properties"]["NAME"],
+            feature["properties"]["STATE_NAME"],
+            feature["properties"]["STATE_ABBR"],
+            feature["properties"]["FIPS"],
+            json.dumps(feature["geometry"]),
+        )
+        for feature in data["features"]
+    ]
+    cols = ["NAME", "STATE_NAME", "STATE_ABBR", "FIPS", "geometry_json"]
+    df = pd.DataFrame(counties_data, columns=cols)
+
+    # Step 2: Parse geometry from the JSON string
+    df["geometry"] = df["geometry_json"].apply(lambda g: shape(json.loads(g)))
+
+    # Step 3: Convert to a GeoDataFrame in EPSG:4326
+    gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+
+    # Optionally, drop the original geometry_json column
+    gdf.drop(columns="geometry_json", inplace=True)
+    return gdf
 
 
 def process_raster(
@@ -70,7 +82,7 @@ def process_raster(
 
             # Create results dataframe
             results = pd.DataFrame(
-                {"county_id": counties.id, var_name: [s["mean"] for s in stats]}
+                {"county_id": counties.FIPS, var_name: [s["mean"] for s in stats]}
             )
 
             logger.info(f"Processed {var_name} raster for {len(results)} counties")
@@ -81,83 +93,30 @@ def process_raster(
         raise
 
 
-def save_results(connection_string: str, results: pd.DataFrame):
-    """
-    Save computed climate normals to the database.
-
-    Args:
-        connection_string: PostgreSQL connection string
-        results: DataFrame containing computed climate normals
-    """
-    try:
-        # Create climate_normals table if it doesn't exist
-        with psycopg2.connect(connection_string) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS climate_normals (
-                        id SERIAL PRIMARY KEY,
-                        county_id INTEGER REFERENCES counties(id),
-                        pr_above_nonzero_99th FLOAT,
-                        prmax1day FLOAT,
-                        prmax5yr FLOAT,
-                        tavg FLOAT,
-                        tmax1day FLOAT,
-                        tmax_days_ge_100f FLOAT,
-                        tmax_days_ge_105f FLOAT,
-                        tmax_days_ge_95f FLOAT,
-                        tmean_jja FLOAT,
-                        tmin_days_ge_70f FLOAT,
-                        tmin_days_le_0f FLOAT,
-                        tmin_days_le_32f FLOAT,
-                        tmin_jja FLOAT,
-                        pr_annual FLOAT,
-                        pr_days_above_nonzero_99th FLOAT
-                    );
-                """
-                )
-
-                # Insert results
-                columns = results.columns.tolist()
-                values = [tuple(x) for x in results.values]
-
-                insert_query = f"""
-                    INSERT INTO climate_normals ({', '.join(columns)})
-                    VALUES %s
-                    ON CONFLICT (county_id) DO UPDATE
-                    SET {', '.join(f"{col} = EXCLUDED.{col}" for col in columns[1:])};
-                """
-
-                execute_values(cur, insert_query, values)
-
-        logger.info(f"Successfully saved results to database")
-
-    except Exception as e:
-        logger.error(f"Error saving results to database: {e}")
-        raise
-
-
 def main():
     """
     Main function to process climate normals for all variables.
     """
     # Configuration
-    connection_string = (
-        "postgresql://postgres:${POSTGRES_PASSWORD}@localhost/ar_climate_data"
+    gwl_file = (
+        "data/sources/NCA_Atlas_Figures_Beta_Counties_view_-3211749018570635702.geojson"
     )
     raster_dir = "data/outputs/"
 
     # Map of climate variables to their corresponding raster files
     raster_files = {
-        "pr_above_nonzero_99th": "pr_above_nonzero_99th.tif",
-        "prmax1day": "prmax1day.tif",
-        "tavg": "tavg.tif",
-        # Add other variables as needed
+        "pr_annual": "annual_prcp_grid_10km.tif",
+        "tavg": "annual_temp_grid_10km.tif",
+        "tmean_jja": "tmean_jja_grid_10km.tif",
+        "tmin_days_ge_70f": "avgnds_lt70f_grid_10km.tif",
+        "tmin_days_le_0f": "avgnds_lt0f_grid_10km.tif",
+        "tmin_days_le_32f": "avgnds_lt32f_grid_10km.tif",
+        "tmin_jja": "jja_tmin_grid_10km.tif",
     }
 
     try:
         # Get county geometries
-        counties = get_county_geometries(connection_string)
+        counties = get_county_geometries(gwl_file)
 
         # Process each raster and collect results
         all_results = []
@@ -171,12 +130,26 @@ def main():
             all_results.append(results)
 
         # Merge all results
-        final_results = all_results[0]
+        raw_results = all_results[0]
         for df in all_results[1:]:
-            final_results = final_results.merge(df, on="county_id")
+            raw_results = raw_results.merge(df, on="county_id")
 
-        # Save to database
-        save_results(connection_string, final_results)
+        counties_gdf = counties.merge(raw_results, left_on="FIPS", right_on="county_id")
+
+        if "tmin_days_le_0f" in counties_gdf.columns:
+            counties_gdf.loc[counties_gdf["tmin_days_le_0f"] < 0, "tmin_days_le_0f"] = 0
+        if "tmin_days_le_32f" in counties_gdf.columns:
+            counties_gdf.loc[
+                counties_gdf["tmin_days_le_32f"] < 0, "tmin_days_le_32f"
+            ] = 0
+
+        # Invert the values in tmin_days_ge_70f: replace with 365.25 - current_value
+        if "tmin_days_ge_70f" in counties_gdf.columns:
+            counties_gdf["tmin_days_ge_70f"] = 365.25 - counties_gdf["tmin_days_ge_70f"]
+
+        output_geojson = "final_county_normals.geojson"
+        counties_gdf.to_file(output_geojson, driver="GeoJSON")
+        logger.info(f"Exported final results to {output_geojson}")
 
     except Exception as e:
         logger.error(f"Error in main function: {e}")

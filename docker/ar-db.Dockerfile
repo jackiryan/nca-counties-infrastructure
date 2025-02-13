@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /tmp/
 RUN pip3 install psycopg2-binary>=2.9.9
 
 # Copy configuration and scripts
