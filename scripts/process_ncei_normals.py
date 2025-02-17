@@ -7,10 +7,6 @@ from rasterstats import zonal_stats
 import pandas as pd
 import os
 from shapely.geometry import shape
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 def get_county_geometries(gwl_file: str) -> gpd.GeoDataFrame:
@@ -77,7 +73,7 @@ def process_raster(
                 raster_path,
                 stats=["mean"],
                 nodata=src.nodata,
-                all_touched=False,  # Only include pixels with centroids within polygon
+                all_touched=True,  # Only include pixels with centroids within polygon
             )
 
             # Create results dataframe
@@ -85,11 +81,11 @@ def process_raster(
                 {"county_id": counties.FIPS, var_name: [s["mean"] for s in stats]}
             )
 
-            logger.info(f"Processed {var_name} raster for {len(results)} counties")
+            print(f"Processed {var_name} raster for {len(results)} counties")
             return results
 
     except Exception as e:
-        logger.error(f"Error processing raster {raster_path}: {e}")
+        print(f"Error processing raster {raster_path}: {e}")
         raise
 
 
@@ -106,7 +102,7 @@ def main():
     # Map of climate variables to their corresponding raster files
     raster_files = {
         "pr_annual": "annual_prcp_grid_10km.tif",
-        "tavg": "annual_temp_grid_10km.tif",
+        "tavg": "tavg_conus_grid_10km.tif",
         "tmean_jja": "tmean_jja_grid_10km.tif",
         "tmin_days_ge_70f": "avgnds_lt70f_grid_10km.tif",
         "tmin_days_le_0f": "avgnds_lt0f_grid_10km.tif",
@@ -123,7 +119,7 @@ def main():
         for var_name, raster_file in raster_files.items():
             raster_path = os.path.join(raster_dir, raster_file)
             if not os.path.exists(raster_path):
-                logger.warning(f"Raster file not found: {raster_path}")
+                print(f"Raster file not found: {raster_path}")
                 continue
 
             results = process_raster(raster_path, counties, var_name)
@@ -134,7 +130,7 @@ def main():
         for df in all_results[1:]:
             raw_results = raw_results.merge(df, on="county_id")
 
-        counties_gdf = counties.merge(raw_results, left_on="FIPS", right_on="county_id")
+        counties_gdf = raw_results
 
         if "tmin_days_le_0f" in counties_gdf.columns:
             counties_gdf.loc[counties_gdf["tmin_days_le_0f"] < 0, "tmin_days_le_0f"] = 0
@@ -147,12 +143,12 @@ def main():
         if "tmin_days_ge_70f" in counties_gdf.columns:
             counties_gdf["tmin_days_ge_70f"] = 365.25 - counties_gdf["tmin_days_ge_70f"]
 
-        output_geojson = "final_county_normals.geojson"
-        counties_gdf.to_file(output_geojson, driver="GeoJSON")
-        logger.info(f"Exported final results to {output_geojson}")
+        output_json = "final_county_normals_2.json"
+        counties_gdf.to_json(output_json, orient="records", indent=4)
+        print(f"Exported final results to {output_json}")
 
     except Exception as e:
-        logger.error(f"Error in main function: {e}")
+        print(f"Error in main function: {e}")
         raise
 
 

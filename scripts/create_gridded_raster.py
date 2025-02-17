@@ -68,18 +68,17 @@ def parse_arguments():
         help="Interpolation method to use (ordinary or universal kriging)",
     )
     parser.add_argument(
-        "--drift_terms",
-        type=str,
-        nargs="+",
-        default=["regional_linear", "point_log"],
-        choices=["regional_linear", "point_log", "external_Z", "specified"],
-        help="Drift terms for universal kriging",
-    )
-    parser.add_argument(
         "--nlags",
         type=int,
         default=20,
         help="Number of lags to use for variogram calculation",
+    )
+    parser.add_argument(
+        "--component",
+        type=str,
+        choices=["CONUS", "Hawaii", "Alaska", "Puerto Rico"],
+        default="CONUS",
+        help="Component of the data set to filter to.",
     )
     return parser.parse_args()
 
@@ -103,18 +102,22 @@ def load_and_clean_data(input_file: Path, variable_name: str) -> pd.DataFrame:
     # Exclude the typical no-data value
     df = df[df[variable_name] != 9999]
 
-    print(f"Total stations after filtering: {len(df)}")
+    print(f"Total stations after filtering flags: {len(df)}")
     nstations_complete = df[f"comp_flag_{variable_name}"].value_counts().to_string()
     print(f"Stations by completeness flag:\n{nstations_complete}")
 
     return df
 
 
-def transform_coordinates(df: pd.DataFrame) -> tuple:
+def transform_coordinates(
+    df: pd.DataFrame, projection: str, proj_bounds: tuple[int, int, int, int]
+) -> tuple:
     """
-    Transform station coordinates from WGS84 to CONUS Albers (EPSG:5072).
+    Transform station coordinates from WGS84 to CONUS Albers (EPSG:5072) or a
+    similar equal area projection for discontiguous portions of the US.
     """
-    transformer = Transformer.from_crs("EPSG:4326", "EPSG:5072", always_xy=True)
+    transformer = Transformer.from_crs("EPSG:4326", projection, always_xy=True)
+    lat_min, lon_min, lat_max, lon_max = proj_bounds
 
     # Transform station coordinates
     x_stations, y_stations = transformer.transform(
@@ -122,8 +125,8 @@ def transform_coordinates(df: pd.DataFrame) -> tuple:
     )
 
     # Define the bounds in Albers projection (experimentally derived for CONUS)
-    x_min, y_min = transformer.transform(-125, 20)
-    x_max, y_max = transformer.transform(-60, 50)
+    x_min, y_min = transformer.transform(lon_min, lat_min)
+    x_max, y_max = transformer.transform(lon_max, lat_max)
 
     return x_stations, y_stations, x_min, x_max, y_min, y_max
 
@@ -148,7 +151,11 @@ def create_grid(bounds: tuple, resolution: float) -> tuple:
     return xx, yy
 
 
-def filter_close_points(x, y, values, min_distance=1000):  # distance in meters
+def filter_close_points(x, y, values, bounds, min_distance=1000):  # distance in meters
+    x_min, x_max, y_min, y_max = bounds
+    in_bounds = (x >= x_min) & (x <= x_max) & (y >= y_min) & (y <= y_max)
+    x, y, values = x[in_bounds], y[in_bounds], values[in_bounds]
+
     points = np.column_stack((x, y))
     filtered_indices = []
     for i in range(len(points)):
@@ -174,17 +181,59 @@ class KrigingInterpolator:
         self,
         method="universal",
         variogram_model="spherical",
-        drift_terms=["regional_linear"],
         nlags=20,  # Using 20 instead of default 6 for better variogram estimation
         weight=True,  # Enable distance-based variogram point weighting
+        component="CONUS",
         **kwargs,
     ):
         self.method = method
         self.variogram_model = variogram_model
-        self.drift_terms = drift_terms
         self.nlags = nlags
         self.weight = weight
         self.kwargs = kwargs
+        if component == "Alaska":
+            self.dem_file = "data/ancillary/alaska_30as_dem.tif"
+        elif component == "Hawaii":
+            self.dem_file = "data/ancillary/hawaii_30as_dem.tif"
+        elif component == "Puerto Rico":
+            self.dem_file = "data/ancillary/puerto_rico_30as_dem.tif"
+        else:
+            self.dem_file = "data/ancillary/nation_30as_dem.tif"
+        if self.method == "universal":
+            self.drift_terms = [self._drift_latitude, self._drift_elevation]
+        else:
+            self.drift_terms = None
+
+    def _drift_latitude(self, x, y):
+        """
+        Custom drift function based on normalized latitude.
+        Expects x and y to be arrays or lists.
+        """
+        y = np.array(y)
+        # Normalize latitude to the range [0, 1]
+        return (y - np.min(y)) / (np.max(y) - np.min(y))
+
+    def _drift_elevation(self, x, y):
+        """
+        Custom drift function based on DEM elevation.
+        Assumes that the input x and y coordinates are in the same
+        coordinate system as the DEM (EPSG:5072).
+        """
+        if self.dem_filepath is None:
+            raise ValueError(
+                "DEM filepath not provided for elevation drift calculation."
+            )
+        # Open the DEM and sample elevation at each (x, y)
+        with rasterio.open(self.dem_filepath) as src:
+            # Create a list of coordinate pairs
+            coords = [(xi, yi) for xi, yi in zip(x, y)]
+            # Sample returns a generator of tuples; extract the first band value for each point.
+            elevations = np.array([val[0] for val in src.sample(coords)])
+        # Normalize elevations to the range [0, 1]
+        elevations_norm = (elevations - np.min(elevations)) / (
+            np.max(elevations) - np.min(elevations)
+        )
+        return elevations_norm
 
     def interpolate(self, x, y, values, gridx, gridy):
         """
@@ -218,27 +267,7 @@ class KrigingInterpolator:
 
         # Execute kriging
         z, ss = krig.execute("grid", gridx, gridy)
-
         return z, ss
-
-    @staticmethod
-    def calculate_drift_components(x, y):
-        """
-        Calculate additional drift components based on geographical features.
-        This can be customized based on known trends in your data.
-        """
-        # Elevation-based drift (if we add DEMs to ancillary files)
-        # elevation = get_elevation(x, y)
-        # drift_elevation = elevation / np.max(elevation)
-
-        # Distance from coast (if relevant)
-        # coast_distance = calculate_coast_distance(x, y)
-        # drift_coastal = np.exp(-coast_distance / scale_factor)
-
-        # Latitude-based temperature gradient
-        drift_latitude = (y - np.min(y)) / (np.max(y) - np.min(y))
-
-        return drift_latitude
 
 
 def interpolate_measurement(
@@ -275,29 +304,40 @@ def interpolate_measurement(
     return z  # If you want the kriging variance, you could also return ss.
 
 
-def clip_to_lower48(
-    grid_data: np.ndarray, transform: rasterio.transform.Affine, clip_file: str
+def clip_to_component(
+    grid_data: np.ndarray,
+    transform: rasterio.transform.Affine,
+    clip_file: str,
+    projection: str = "EPSG:5072",
 ) -> np.ndarray:
     """
     Clip the grid data to the lower 48 boundary using the provided geopackage file.
     Pixels outside the boundary are set to np.nan.
     """
     gdf = gpd.read_file(clip_file)
-    # Ensure the clipping geometry is in EPSG:5072
-    if gdf.crs != "EPSG:5072":
-        gdf = gdf.to_crs("EPSG:5072")
+    # Ensure the clipping geometry is in EPSG:5072, or correct projection
+    # for the component
+    if gdf.crs != projection:
+        gdf = gdf.to_crs(projection)
     geoms = [geom for geom in gdf.geometry]
 
     # Create a mask: with invert=True, pixels inside the geometries are True.
     mask = geometry_mask(
-        geoms, out_shape=grid_data.shape, transform=transform, invert=True
+        geoms,
+        out_shape=grid_data.shape,
+        transform=transform,
+        all_touched=True,
+        invert=True,
     )
     clipped_data = np.where(mask, grid_data, np.nan)
     return clipped_data
 
 
 def write_geotiff(
-    output_file: Path, grid_data: np.ndarray, transform: rasterio.transform.Affine
+    output_file: Path,
+    grid_data: np.ndarray,
+    transform: rasterio.transform.Affine,
+    projection: str = "EPSG:5072",
 ):
     """
     Write gridded data to a GeoTIFF file using the given transform.
@@ -305,6 +345,15 @@ def write_geotiff(
     # Make sure the data is in a floating type for nodata=np.nan
     if not np.issubdtype(grid_data.dtype, np.floating):
         grid_data = grid_data.astype("float32")
+
+    if projection == "EPSG:5072":
+        desc = "CONUS Albers Equal Area (EPSG:5072)"
+    elif projection == "EPSG:3338":
+        desc = "Alaska Albers Equal Area (EPSG:3338)"
+    elif projection == "EPSG:3759":
+        desc = "Hawaii zone 3 (ftUS) (EPSG:3759)"
+    elif projection == "EPSG:4139":
+        desc = "Puerto Rico (EPSG:4139)"
 
     with rasterio.open(
         output_file,
@@ -314,7 +363,7 @@ def write_geotiff(
         width=grid_data.shape[1],
         count=1,
         dtype=grid_data.dtype,
-        crs="EPSG:5072",
+        crs=projection,
         transform=transform,
         nodata=np.nan,
     ) as dst:
@@ -326,7 +375,7 @@ def write_geotiff(
             TIFFTAG_SOFTWARE="create_gridded_raster.py",
             units="degrees Fahrenheit",
             source="NOAA NCEI 1991-2020 Climate Normals",
-            projection="CONUS Albers Equal Area (EPSG:5072)",
+            projection=desc,
         )
 
 
@@ -337,6 +386,7 @@ def create_measurement_grid(
     resolution: float = 5000,
     interp_method: str = "ordinary",
     variogram_model: str = "spherical",
+    component: str = "CONUS",
 ):
     """
     Create a gridded raster of a given measurement from weather station data using kriging.
@@ -344,12 +394,37 @@ def create_measurement_grid(
     # Load and clean data
     df = load_and_clean_data(input_file, variable_name)
 
+    if component == "Alaska":
+        clip_file = "data/ancillary/alaska_5m_epsg3338.gpkg"
+        proj = "EPSG:3338"
+        proj_bounds = (23, -172, 87, -47)
+    elif component == "Hawaii":
+        clip_file = "data/ancillary/hawaii_5m_epsg3759.gpkg"
+        proj = "EPSG:3759"
+        proj_bounds = (18, -160, 23, -154)
+    elif component == "PR":
+        clip_file = "data/ancillary/puerto_rico_5m_epsg4139.gpkg"
+        proj = "EPSG:4139"
+        proj_bounds = (17, -69, 19, -64)
+    else:
+        clip_file = "data/ancillary/nation_5m_lower48_epsg5072.gpkg"
+        proj = "EPSG:5072"
+        proj_bounds = (20, -120, 50, -60)
+
     # Transform coordinates
-    x_stations, y_stations, x_min, x_max, y_min, y_max = transform_coordinates(df)
+    x_stations, y_stations, x_min, x_max, y_min, y_max = transform_coordinates(
+        df, proj, proj_bounds
+    )
+    proj_bounds_transformed = (x_min, x_max, y_min, y_max)
 
     x_filtered, y_filtered, values_filtered = filter_close_points(
-        x_stations, y_stations, df[variable_name].values, min_distance=resolution
+        x_stations,
+        y_stations,
+        df[variable_name].values,
+        proj_bounds_transformed,
+        min_distance=resolution,
     )
+    print(f"Filtered on bbox down to {len(values_filtered)} points")
 
     # Create grid (2D mesh in ascending order for x and y)
     grid_x_mesh, grid_y_mesh = create_grid((x_min, x_max, y_min, y_max), resolution)
@@ -371,12 +446,13 @@ def create_measurement_grid(
     # Since we flipped the data after kriging, row=0 corresponds to y_max.
     transform_affine = from_origin(x_min, y_max, resolution, resolution)
 
-    # Clip the grid to the lower 48 boundary
-    clip_file = "data/ancillary/nation_5m_lower48_epsg5072.gpkg"
-    grid_temp_clipped = clip_to_lower48(grid_temp, transform_affine, clip_file)
+    # Clip the grid to the boundary specified in the clip file
+    grid_temp_clipped = clip_to_component(
+        grid_temp, transform_affine, clip_file, projection=proj
+    )
 
     # Write the clipped grid to GeoTIFF
-    write_geotiff(output_file, grid_temp_clipped, transform_affine)
+    write_geotiff(output_file, grid_temp_clipped, transform_affine, projection=proj)
 
     print(f"Successfully created gridded raster of {variable_name}: {output_file}")
 
@@ -391,6 +467,7 @@ def main():
         resolution=args.resolution,
         interp_method=args.interp_method,
         variogram_model=args.variogram_model,
+        component=args.component,
     )
 
 
