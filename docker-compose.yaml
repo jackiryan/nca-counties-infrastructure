@@ -20,6 +20,7 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@ar-db/ar_climate_data
+      - MAPTILER_API_KEY=${MAPTILER_API_KEY}
     depends_on:
       - ar-db
   ar-db:

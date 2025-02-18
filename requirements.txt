@@ -3,6 +3,7 @@ fastapi
 matplotlib
 pandas
 geopandas
+httpx
 psycopg2-binary>=2.9.9
 pydantic
 pykrige

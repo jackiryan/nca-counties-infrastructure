@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+import httpx
 import os
 from pydantic import BaseModel, create_model
 from sqlalchemy import (
@@ -15,11 +15,12 @@ from sqlalchemy import (
     select,
     and_,
 )
+from typing import Optional
 import uvicorn
 
 app = FastAPI()
 
-dev = True
+dev = False
 if dev:
     origins = ["*"]
 else:
@@ -35,6 +36,7 @@ app.add_middleware(
 
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+MAPTILER_API_KEY = os.getenv("MAPTILER_API_KEY", "")
 
 engine = create_engine(DATABASE_URL, echo=True)
 metadata = MetaData()
@@ -113,6 +115,28 @@ class ClimateData(BaseModel):
     name: Optional[str] = None
     fips: Optional[str] = None
     state_abbr: Optional[str] = None
+
+
+@app.get("/base_tiles/{z}/{x}/{y}.pbf")
+async def get_base_tile(z: int, x: int, y: int):
+    """Reverse proxy for frontend to avoid leaking API key."""
+    tile_url = (
+        f"https://api.maptiler.com/tiles/v3-lite/{z}/{x}/{y}.pbf?key={MAPTILER_API_KEY}"
+    )
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(tile_url)
+            if response.status_code == 200:
+                return Response(
+                    content=response.content, media_type="application/x-protobuf"
+                )
+            else:
+                raise HTTPException(
+                    status_code=response.status_code, detail="Error fetching tile"
+                )
+        except httpx.RequestError:
+            raise HTTPException(status_code=500, detail="Server error fetching tile")
 
 
 @app.get("/climate-variables")
@@ -282,7 +306,7 @@ def get_climate_normals(
         ClimateNormalSubset = create_model(
             "ClimateNormalSubset",
             county_fips=(str, ...),
-            **{var: (Optional[float], None)}
+            **{var: (Optional[float], None)},
         )
         # Convert each row into a dictionary and then into the dynamic model.
         response = [ClimateNormalSubset(**dict(row._mapping)) for row in results]
