@@ -13,11 +13,12 @@ RUN pip3 install psycopg2-binary>=2.9.9
 
 # Copy configuration and scripts
 COPY docker/seed-db.sh /usr/local/bin/
+COPY docker/seed-normals.sh /usr/local/bin/
 COPY scripts/ /usr/local/bin/
 COPY database/init-db.sql /docker-entrypoint-initdb.d/
 
 COPY data/ /data/
 
-RUN chmod +x /usr/local/bin/seed-db.sh /usr/local/bin/seed_nca_atlas.py
+RUN chmod +x /usr/local/bin/seed-db.sh /usr/local/bin/seed-normals.sh /usr/local/bin/seed_nca_atlas.py /usr/local/bin/seed_normals.py
 
 CMD ["postgres"]

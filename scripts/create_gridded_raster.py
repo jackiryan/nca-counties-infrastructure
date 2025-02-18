@@ -76,7 +76,7 @@ def parse_arguments():
     parser.add_argument(
         "--component",
         type=str,
-        choices=["CONUS", "Hawaii", "Alaska", "Puerto Rico"],
+        choices=["CONUS", "Hawaii", "Alaska", "PR"],
         default="CONUS",
         help="Component of the data set to filter to.",
     )
@@ -195,12 +195,13 @@ class KrigingInterpolator:
             self.dem_file = "data/ancillary/alaska_30as_dem.tif"
         elif component == "Hawaii":
             self.dem_file = "data/ancillary/hawaii_30as_dem.tif"
-        elif component == "Puerto Rico":
-            self.dem_file = "data/ancillary/puerto_rico_30as_dem.tif"
         else:
             self.dem_file = "data/ancillary/nation_30as_dem.tif"
         if self.method == "universal":
-            self.drift_terms = [self._drift_latitude, self._drift_elevation]
+            if component == "Puerto Rico":
+                self.drift_terms = [self._drift_latitude]
+            else:
+                self.drift_terms = [self._drift_latitude, self._drift_elevation]
         else:
             self.drift_terms = None
 
@@ -352,7 +353,7 @@ def write_geotiff(
         desc = "Alaska Albers Equal Area (EPSG:3338)"
     elif projection == "EPSG:3759":
         desc = "Hawaii zone 3 (ftUS) (EPSG:3759)"
-    elif projection == "EPSG:4139":
+    elif projection == "EPSG:3991":
         desc = "Puerto Rico (EPSG:4139)"
 
     with rasterio.open(
@@ -403,9 +404,9 @@ def create_measurement_grid(
         proj = "EPSG:3759"
         proj_bounds = (18, -160, 23, -154)
     elif component == "PR":
-        clip_file = "data/ancillary/puerto_rico_5m_epsg4139.gpkg"
-        proj = "EPSG:4139"
-        proj_bounds = (17, -69, 19, -64)
+        clip_file = "data/ancillary/puerto_rico_5m_epsg3991.gpkg"
+        proj = "EPSG:3991"
+        proj_bounds = (10, -70, 20, -60)
     else:
         clip_file = "data/ancillary/nation_5m_lower48_epsg5072.gpkg"
         proj = "EPSG:5072"

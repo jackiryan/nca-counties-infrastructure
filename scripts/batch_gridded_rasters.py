@@ -29,7 +29,7 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
-    component = "conus"
+    component = "puerto_rico"
     for json_field, csv_field in FIELD_MAP.items():
         if csv_field == "--":
             continue
@@ -50,7 +50,7 @@ def main():
                     "--resolution",
                     "10000",
                     "--component",
-                    component.upper(),
+                    "PR",
                 ],
                 check=True,
             )

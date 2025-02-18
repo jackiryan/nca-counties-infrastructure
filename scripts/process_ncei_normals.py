@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from functools import reduce
 import geopandas as gpd
 import json
 import rasterio
@@ -89,7 +90,7 @@ def process_raster(
         raise
 
 
-def main():
+def main() -> None:
     """
     Main function to process climate normals for all variables.
     """
@@ -100,15 +101,24 @@ def main():
     raster_dir = "data/outputs/"
 
     # Map of climate variables to their corresponding raster files
-    raster_files = {
-        "pr_annual": "annual_prcp_grid_10km.tif",
-        "tavg": "tavg_conus_grid_10km.tif",
-        "tmean_jja": "tmean_jja_grid_10km.tif",
-        "tmin_days_ge_70f": "avgnds_lt70f_grid_10km.tif",
-        "tmin_days_le_0f": "avgnds_lt0f_grid_10km.tif",
-        "tmin_days_le_32f": "avgnds_lt32f_grid_10km.tif",
-        "tmin_jja": "jja_tmin_grid_10km.tif",
-    }
+    variables = [
+        "tavg",
+        "tmax_days_ge_100f",
+        "tmean_jja",
+        "tmin_days_ge_70f",
+        "tmin_days_le_0f",
+        "tmin_days_le_32f",
+        "tmin_jja",
+        "pr_annual",
+    ]
+    raster_files: dict[str, list[str]] = {}
+    for var in variables:
+        raster_files[var] = [
+            f"{var}_conus_grid_10km.tif",
+            f"{var}_alaska_grid_10km.tif",
+            f"{var}_hawaii_grid_10km.tif",
+            f"{var}_puerto_rico_grid_10km.tif",
+        ]
 
     try:
         # Get county geometries
@@ -116,14 +126,48 @@ def main():
 
         # Process each raster and collect results
         all_results = []
-        for var_name, raster_file in raster_files.items():
-            raster_path = os.path.join(raster_dir, raster_file)
-            if not os.path.exists(raster_path):
-                print(f"Raster file not found: {raster_path}")
-                continue
+        for var_name, raster_file_set in raster_files.items():
+            results = []
+            for ndx, raster_file in enumerate(raster_file_set):
+                raster_path = os.path.join(raster_dir, raster_file)
+                if not os.path.exists(raster_path):
+                    print(f"Raster file not found: {raster_path}")
+                    continue
 
-            results = process_raster(raster_path, counties, var_name)
-            all_results.append(results)
+                if ndx == 0:
+                    results.append(
+                        process_raster(
+                            raster_path,
+                            counties[~counties["FIPS"].isin(["02", "15", "72"])],
+                            var_name,
+                        )
+                    )
+                elif ndx == 1:
+                    results.append(
+                        process_raster(
+                            raster_path,
+                            counties[counties["FIPS"].isin(["02"])],
+                            var_name,
+                        )
+                    )
+                elif ndx == 2:
+                    results.append(
+                        process_raster(
+                            raster_path,
+                            counties[counties["FIPS"].isin(["15"])],
+                            var_name,
+                        )
+                    )
+                elif ndx == 3:
+                    results.append(
+                        process_raster(
+                            raster_path,
+                            counties[counties["FIPS"].isin(["72"])],
+                            var_name,
+                        )
+                    )
+                merged_results = pd.concat(results, ignore_index=True)
+            all_results.append(merged_results)
 
         # Merge all results
         raw_results = all_results[0]
@@ -143,7 +187,7 @@ def main():
         if "tmin_days_ge_70f" in counties_gdf.columns:
             counties_gdf["tmin_days_ge_70f"] = 365.25 - counties_gdf["tmin_days_ge_70f"]
 
-        output_json = "final_county_normals_2.json"
+        output_json = "data/outputs/us_climate_normals_1991-2020.json"
         counties_gdf.to_json(output_json, orient="records", indent=4)
         print(f"Exported final results to {output_json}")
 

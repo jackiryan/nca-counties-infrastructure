@@ -1,6 +1,6 @@
 pg_data/
 data/sources/
-data/outputs/
+data/outputs/*.tif*
 .mypy_cache/
 venv/
 .env
