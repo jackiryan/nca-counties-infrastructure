@@ -10,7 +10,7 @@ pykrige
 pyproj
 rasterio
 rasterstats
-requests>=2.31.0
+requests>=2.32.4
 seaborn
 sqlalchemy
 uvicorn
