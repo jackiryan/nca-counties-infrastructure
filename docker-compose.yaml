@@ -2,13 +2,19 @@ services:
   martin:
     image: ghcr.io/maplibre/martin:v0.15.0
     restart: unless-stopped
+    # Published on loopback only: nginx proxies public traffic to these services, and
+    # Docker-published ports bypass the host firewall.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@ar-db/ar_climate_data
     volumes:
       - ./config/martin-config.yaml:/etc/martin/martin-config.yaml
     command: -c /etc/martin/martin-config.yaml
+    # The image's check uses localhost, which resolves to ::1 in the container, but martin
+    # listens on IPv4 only (see listen_addresses in martin-config.yaml).
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/health || exit 1"]
     depends_on:
       - ar-db
   var-api:
@@ -17,7 +23,7 @@ services:
       dockerfile: docker/var-api.Dockerfile
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@ar-db/ar_climate_data
       - MAPTILER_API_KEY=${MAPTILER_API_KEY}
@@ -29,7 +35,7 @@ services:
       dockerfile: docker/ar-db.Dockerfile
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - ./pg_data:/var/lib/postgresql/data
       - ./data:/data

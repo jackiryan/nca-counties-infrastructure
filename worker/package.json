@@ -1,0 +1,24 @@
+{
+	"name": "nca-counties",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Cloudflare Worker serving the NCA Counties tiles and climate data from static snapshots in R2",
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"tail": "wrangler tail",
+		"typecheck": "wrangler types && tsc --noEmit",
+		"upload": "./upload.sh",
+		"compare": "node test/compare.mjs"
+	},
+	"dependencies": {
+		"pmtiles": "^4.5.0"
+	},
+	"devDependencies": {
+		"@mapbox/vector-tile": "^3.0.0",
+		"pbf": "^5.1.2",
+		"typescript": "^5.9.3",
+		"wrangler": "^4.151.0"
+	}
+}

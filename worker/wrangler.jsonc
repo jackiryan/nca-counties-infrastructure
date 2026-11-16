@@ -1,0 +1,27 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "nca-counties",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+
+	"observability": {
+		"enabled": true
+	},
+
+	// The snapshot made by ../scripts/snapshot_backend.sh, uploaded with upload.sh. Create the
+	// bucket once with `npx wrangler r2 bucket create nca-counties`.
+	"r2_buckets": [{ "binding": "DATA", "bucket_name": "nca-counties" }],
+
+	// Kept on so the deployment can be checked at nca-counties.<account>.workers.dev.
+	"workers_dev": true,
+
+	// The paths nginx proxied to martin and FastAPI on the VPS. With these routes Cloudflare
+	// answers them from this Worker instead, so the frontend's URLs don't change. To roll
+	// back to the VPS while its containers still run, comment them out and deploy again.
+	"routes": [
+		{ "pattern": "jackiepi.xyz/api/*", "zone_name": "jackiepi.xyz" },
+		{ "pattern": "www.jackiepi.xyz/api/*", "zone_name": "jackiepi.xyz" },
+		{ "pattern": "jackiepi.xyz/tiles/counties/*", "zone_name": "jackiepi.xyz" },
+		{ "pattern": "www.jackiepi.xyz/tiles/counties/*", "zone_name": "jackiepi.xyz" }
+	]
+}
